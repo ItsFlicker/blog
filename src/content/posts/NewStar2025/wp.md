@@ -9,6 +9,8 @@ draft: false
 
 参加的第一个CTF比赛，仅保留 Pwn 部分
 
+最后靠着 Pwn 到了校内第二名
+
 缺两道题 (content和llama-pwn)
 
 # Week 1
