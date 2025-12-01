@@ -7,7 +7,11 @@ category: CTF
 draft: false
 ---
 
-参加的第二个CTF比赛，不小心 ak Pwn了
+参加的第二个CTF比赛，不小心 ak Pwn 了
+
+和校内全栈神mxym一起打的
+
+唯一抢到的一血是 PWN_GAME
 
 学到了一些新东西
 
