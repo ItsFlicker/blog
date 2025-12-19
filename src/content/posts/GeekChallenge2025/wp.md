@@ -7,13 +7,11 @@ category: CTF
 draft: false
 ---
 
-参加的第二个CTF比赛，不小心 ak Pwn 了
+参加的第二个CTF比赛，终于是 ak Pwn 了，也学到了许多新东西
 
-和校内全栈神mxym一起打的
+和校内全栈神mxym一起打的，最后到了总榜第三名
 
 唯一抢到的一血是 PWN_GAME
-
-学到了一些新东西
 
 # old_rop
 
