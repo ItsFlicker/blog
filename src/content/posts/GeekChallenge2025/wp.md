@@ -1,5 +1,5 @@
 ---
-title: 第十六届极客大挑战 WriteUp
+title: 第十六届极客大挑战 Pwn 全题解
 published: 2025-12-01
 tags: [WriteUp, Pwn, 新生赛]
 category: CTF

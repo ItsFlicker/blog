@@ -1,5 +1,5 @@
 ---
-title: Newstar CTF 2025 WriteUp
+title: Newstar CTF 2025 Pwn WriteUp
 published: 2025-11-30
 tags: [WriteUp, Pwn, 新生赛]
 category: CTF
