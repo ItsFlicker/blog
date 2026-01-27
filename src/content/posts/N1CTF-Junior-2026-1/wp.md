@@ -6,6 +6,8 @@ category: CTF
 draft: false
 ---
 
+好久没写题解了
+
 # ez_canary
 
 ![image-20260126171530938](./6.png)
